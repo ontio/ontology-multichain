@@ -16,11 +16,12 @@
  * along with The ontology.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-package ont
+package ongx
 
 import (
 	"bytes"
 	"fmt"
+	"math/big"
 
 	"github.com/ontio/ontology/common"
 	"github.com/ontio/ontology/common/config"
@@ -30,12 +31,12 @@ import (
 	"github.com/ontio/ontology/smartcontract/event"
 	"github.com/ontio/ontology/smartcontract/service/native"
 	"github.com/ontio/ontology/smartcontract/service/native/utils"
+	"github.com/ontio/ontology/vm/neovm/types"
 )
 
 const (
 	UNBOUND_TIME_OFFSET = "unboundTimeOffset"
 	TOTAL_SUPPLY_NAME   = "totalSupply"
-	INIT_NAME           = "init"
 	TRANSFER_NAME       = "transfer"
 	APPROVE_NAME        = "approve"
 	TRANSFERFROM_NAME   = "transferFrom"
@@ -45,7 +46,41 @@ const (
 	TOTALSUPPLY_NAME    = "totalSupply"
 	BALANCEOF_NAME      = "balanceOf"
 	ALLOWANCE_NAME      = "allowance"
+	ONG_SWAP            = "ongSwap"
+	ONGX_SWAP           = "ongxSwap"
+	SET_SYNC_ADDR_NAME  = "setSyncAddr"
+
+	TRANSFER_FLAG byte = 1
+	APPROVE_FLAG  byte = 2
 )
+
+var (
+	SYNC_ADDRESS = []byte("syncAddress")
+)
+
+func GetBalanceValue(native *native.NativeService, flag byte) ([]byte, error) {
+	source := common.NewZeroCopySource(native.Input)
+	from, err := utils.DecodeAddress(source)
+	if err != nil {
+		return utils.BYTE_FALSE, errors.NewDetailErr(err, errors.ErrNoCode, "[GetBalanceValue] get from address error!")
+	}
+	contract := native.ContextRef.CurrentContext().ContractAddress
+	var key []byte
+	if flag == APPROVE_FLAG {
+		to, err := utils.DecodeAddress(source)
+		if err != nil {
+			return utils.BYTE_FALSE, errors.NewDetailErr(err, errors.ErrNoCode, "[GetBalanceValue] get from address error!")
+		}
+		key = GenApproveKey(contract, from, to)
+	} else if flag == TRANSFER_FLAG {
+		key = GenBalanceKey(contract, from)
+	}
+	amount, err := utils.GetStorageUInt64(native, key)
+	if err != nil {
+		return utils.BYTE_FALSE, errors.NewDetailErr(err, errors.ErrNoCode, "[GetBalanceValue] address parse error!")
+	}
+	return types.BigIntToBytes(big.NewInt(int64(amount))), nil
+}
 
 func AddNotifications(native *native.NativeService, contract common.Address, state *State) {
 	if !config.DefConfig.Common.EnableEventLog {
@@ -55,6 +90,17 @@ func AddNotifications(native *native.NativeService, contract common.Address, sta
 		&event.NotifyEventInfo{
 			ContractAddress: contract,
 			States:          []interface{}{TRANSFER_NAME, state.From.ToBase58(), state.To.ToBase58(), state.Value},
+		})
+}
+
+func AddOngxSwapNotifications(native *native.NativeService, contract common.Address, state *State) {
+	if !config.DefConfig.Common.EnableEventLog {
+		return
+	}
+	native.Notifications = append(native.Notifications,
+		&event.NotifyEventInfo{
+			ContractAddress: contract,
+			States:          []interface{}{ONGX_SWAP, state.From.ToBase58(), state.Value},
 		})
 }
 
@@ -113,14 +159,6 @@ func TransferedFrom(native *native.NativeService, currentContract common.Address
 		return 0, 0, err
 	}
 	return fromBalance, toBalance, nil
-}
-
-func getUnboundOffset(native *native.NativeService, contract, address common.Address) (uint32, error) {
-	offset, err := utils.GetStorageUInt32(native, genAddressUnboundOffsetKey(contract, address))
-	if err != nil {
-		return 0, err
-	}
-	return offset, nil
 }
 
 func genTransferFromKey(contract common.Address, state *TransferFrom) []byte {
